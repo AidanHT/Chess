@@ -4,12 +4,15 @@ import pygame
 WHITE = (255, 255, 255)
 GRAY = (128, 128, 128)
 
-def draw_board(win, square_size):
+def draw_board(win, square_size, selected_outline=None):
     colors = [WHITE, GRAY]
     for row in range(8):
         for col in range(8):
             color = colors[(row + col) % 2]
             pygame.draw.rect(win, color, (col * square_size, row * square_size, square_size, square_size))
+            # Draw outline for the selected piece
+            if selected_outline == (row, col):
+                pygame.draw.rect(win, (0, 255, 0), (col * square_size, row * square_size, square_size, square_size), 5)  # Green outline
 
 def initialize_board():
     board = [[None for _ in range(8)] for _ in range(8)]
