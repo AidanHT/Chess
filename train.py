@@ -25,7 +25,12 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import OneCycleLR
 
-import wandb
+try:
+    import wandb
+    _WANDB_AVAILABLE = True
+except ImportError:
+    wandb = None  # type: ignore[assignment]
+    _WANDB_AVAILABLE = False
 
 from data_pipeline import find_pgn_files, make_dataloader
 from model import ChessResNet
@@ -308,7 +313,7 @@ def train(cfg: TrainConfig, resume_from: Optional[str] = None) -> None:
         )
 
     # ── wandb (rank 0 only) ───────────────────────────────────────────────────
-    if is_main and not cfg.wandb_disabled:
+    if is_main and _WANDB_AVAILABLE and not cfg.wandb_disabled:
         wandb.init(
             project=cfg.wandb_project,
             name=cfg.wandb_run_name,
@@ -383,7 +388,7 @@ def train(cfg: TrainConfig, resume_from: Optional[str] = None) -> None:
                         total_loss.item(), p_loss.item(), v_loss.item(),
                         lr, throughput,
                     )
-                    if not cfg.wandb_disabled:
+                    if _WANDB_AVAILABLE and not cfg.wandb_disabled:
                         wandb.log(
                             {
                                 "train/total_loss":  total_loss.item(),
@@ -417,7 +422,7 @@ def train(cfg: TrainConfig, resume_from: Optional[str] = None) -> None:
                     "Epoch %d/%d complete — avg policy %.4f  avg value %.4f",
                     epoch + 1, cfg.epochs, avg_p, avg_v,
                 )
-                if not cfg.wandb_disabled:
+                if _WANDB_AVAILABLE and not cfg.wandb_disabled:
                     wandb.log(
                         {
                             "epoch/avg_policy_loss": avg_p,
@@ -435,7 +440,7 @@ def train(cfg: TrainConfig, resume_from: Optional[str] = None) -> None:
         # Always shut down DataLoader workers before DDP teardown.
         # Without this, worker processes become zombies on exception exit.
         del loader
-        if is_main and not cfg.wandb_disabled:
+        if is_main and _WANDB_AVAILABLE and not cfg.wandb_disabled:
             wandb.finish()
         _cleanup_ddp()
 
