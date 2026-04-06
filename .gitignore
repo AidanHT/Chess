@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# PyTorch / ML artifacts
+*.pt
+*.pth
+*.ckpt
+checkpoints/
+runs/
+wandb/
+
+# Training data & self-play games
+data/
+games/
+*.pgn
+*.npz
+*.npy
+*.hdf5
+*.h5
+
+# Logs & profiling
+logs/
+*.log
+*.prof
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude
+.claude/
+
+# Misc
+.env
+*.tmp

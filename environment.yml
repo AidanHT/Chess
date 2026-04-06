@@ -1,0 +1,24 @@
+name: chess-az
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+
+  # Core numerics
+  - numpy>=2.0
+
+  # PyTorch with CUDA 12.4 (compatible with driver 581.83 / CUDA 13.0)
+  - pytorch>=2.4
+  - torchvision
+  - pytorch-cuda=12.4
+
+  # Utilities
+  - tqdm
+  - tensorboard
+
+  - pip:
+    - python-chess>=1.10
