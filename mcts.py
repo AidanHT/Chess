@@ -40,7 +40,7 @@ import chess
 import numpy as np
 import torch
 
-from core_types import ACTION_SPACE_SIZE
+from core_types import ACTION_SPACE_SIZE, BOARD_SIZE, TOTAL_PLANES
 from model import ChessResNet
 from state_encoding import (
     decode_move_perspective,
@@ -186,6 +186,8 @@ class MCTS:
         num_simulations: int,
         temperature: float = 1.0,
     ) -> np.ndarray:
+        # Set eval mode once per search, not on every _infer() call.
+        self.model.eval()
         """
         Run batched MCTS from *board* and return a visit-count policy vector.
 
@@ -403,11 +405,10 @@ class MCTS:
             encode_move_perspective(m, board.turn) for m in legal_moves
         ]
 
-        # Extract logits for legal moves, apply softmax for prior probabilities.
-        legal_logits = np.array(
-            [policy_logits[i] for i in action_indices], dtype=np.float32
-        )
-        legal_logits -= legal_logits.max()  # shift by max for numerical stability
+        # Extract logits for legal moves via numpy fancy indexing (one vectorised
+        # C call) rather than a Python loop over individual elements.
+        legal_logits = policy_logits[np.array(action_indices, dtype=np.int64)]
+        legal_logits = legal_logits - legal_logits.max()  # new array; stable shift
         exp_l = np.exp(legal_logits)
         probs: np.ndarray = exp_l / exp_l.sum()
 
@@ -444,6 +445,7 @@ class MCTS:
     # Neural-network inference (batched)
     # ──────────────────────────────────────────────────────────────────────────
 
+    @torch.no_grad()
     def _infer(
         self, boards: list[chess.Board]
     ) -> tuple[list[np.ndarray], np.ndarray]:
@@ -468,20 +470,21 @@ class MCTS:
         values : numpy.ndarray
             Shape ``(len(boards),)`` float32; each scalar in ``(−1, 1)``.
         """
-        # encode_board returns (8, 8, 119); transpose to (119, 8, 8) for Conv2d.
-        tensors = [
-            torch.from_numpy(
-                np.ascontiguousarray(encode_board(b).transpose(2, 0, 1))
-            )
-            for b in boards
-        ]
-        batch_t = torch.stack(tensors).to(self.device)  # (B, 119, 8, 8)
+        B = len(boards)
+        # Pre-allocate one contiguous buffer and fill in-place — avoids
+        # creating B intermediate tensors and an extra torch.stack() copy.
+        batch_np = np.empty((B, TOTAL_PLANES, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+        for i, b in enumerate(boards):
+            # encode_board returns (8, 8, 119); np.copyto handles the
+            # non-contiguous transpose view without an intermediate allocation.
+            np.copyto(batch_np[i], encode_board(b).transpose(2, 0, 1))
 
-        self.model.eval()
+        batch_t = torch.from_numpy(batch_np).to(self.device)  # (B, 119, 8, 8)
+
         policy_logits_t, values_t = self.model(batch_t)
         # policy_logits_t : (B, 4672),  values_t : (B,)
 
-        logits_list = [policy_logits_t[i].cpu().numpy() for i in range(len(boards))]
+        logits_list = [policy_logits_t[i].cpu().numpy() for i in range(B)]
         values_np: np.ndarray = values_t.cpu().float().numpy()
         return logits_list, values_np
 

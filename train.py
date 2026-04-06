@@ -321,119 +321,123 @@ def train(cfg: TrainConfig, resume_from: Optional[str] = None) -> None:
     checkpoint_dir = Path(cfg.checkpoint_dir)
 
     # ── Epoch loop ────────────────────────────────────────────────────────────
-    for epoch in range(start_epoch, cfg.epochs):
-        model.train()
-        epoch_p_loss = 0.0
-        epoch_v_loss = 0.0
-        epoch_steps  = 0
-        t0           = time.perf_counter()
+    try:
+        for epoch in range(start_epoch, cfg.epochs):
+            model.train()
+            epoch_p_loss = 0.0
+            epoch_v_loss = 0.0
+            epoch_steps  = 0
+            t0           = time.perf_counter()
 
-        for board, policy_target, value_target in loader:
-            # Non-blocking transfers overlap with previous kernel execution.
-            board         = board.to(device, non_blocking=True)          # (B, 119, 8, 8)
-            policy_target = policy_target.to(device, non_blocking=True)  # (B, 4672)
-            value_target  = value_target.to(device, non_blocking=True)   # (B,)
+            for board, policy_target, value_target in loader:
+                # Non-blocking transfers overlap with previous kernel execution.
+                board         = board.to(device, non_blocking=True)          # (B, 119, 8, 8)
+                policy_target = policy_target.to(device, non_blocking=True)  # (B, 4672)
+                value_target  = value_target.to(device, non_blocking=True)   # (B,)
 
-            optimizer.zero_grad(set_to_none=True)
+                optimizer.zero_grad(set_to_none=True)
 
-            # AMP: forward + loss in lower precision; backward accumulates in fp32.
-            with autocast(device_type=device.type, enabled=cfg.amp):
-                policy_logits, value_pred = model(board)
-                total_loss, p_loss, v_loss = compute_loss(
-                    policy_logits, value_pred,
-                    policy_target, value_target,
-                    value_weight=cfg.value_loss_weight,
-                    policy_weight=cfg.policy_loss_weight,
-                )
+                # AMP: forward + loss in lower precision; backward accumulates in fp32.
+                with autocast(device_type=device.type, enabled=cfg.amp):
+                    policy_logits, value_pred = model(board)
+                    total_loss, p_loss, v_loss = compute_loss(
+                        policy_logits, value_pred,
+                        policy_target, value_target,
+                        value_weight=cfg.value_loss_weight,
+                        policy_weight=cfg.policy_loss_weight,
+                    )
 
-            scaler.scale(total_loss).backward()
+                scaler.scale(total_loss).backward()
 
-            # Unscale before clipping so the threshold is in real-gradient space.
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
+                # Unscale before clipping so the threshold is in real-gradient space.
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
 
-            scale_before = scaler.get_scale()
-            scaler.step(optimizer)
-            scaler.update()
-            # Only advance the LR schedule when the optimizer step was actually
-            # taken. If overflow was detected, scaler.update() reduces the scale,
-            # and advancing the scheduler without a real update would drift the
-            # LR curve ahead of actual training progress.
-            if scaler.get_scale() >= scale_before:
-                scheduler.step()
+                scale_before = scaler.get_scale()
+                scaler.step(optimizer)
+                scaler.update()
+                # Only advance the LR schedule when the optimizer step was actually
+                # taken. If overflow was detected, scaler.update() reduces the scale,
+                # and advancing the scheduler without a real update would drift the
+                # LR curve ahead of actual training progress.
+                if scaler.get_scale() >= scale_before:
+                    scheduler.step()
 
-            global_step  += 1
-            epoch_steps  += 1
-            epoch_p_loss += p_loss.item()
-            epoch_v_loss += v_loss.item()
+                global_step  += 1
+                epoch_steps  += 1
+                epoch_p_loss += p_loss.item()
+                epoch_v_loss += v_loss.item()
 
-            # ── Step-level logging ───────────────────────────────────────────
-            if is_main and global_step % cfg.log_every_n_steps == 0:
-                lr        = scheduler.get_last_lr()[0]
-                elapsed   = time.perf_counter() - t0
-                throughput = (
-                    cfg.batch_size * world_size * cfg.log_every_n_steps / elapsed
-                )
+                # ── Step-level logging ───────────────────────────────────────────
+                if is_main and global_step % cfg.log_every_n_steps == 0:
+                    lr        = scheduler.get_last_lr()[0]
+                    elapsed   = time.perf_counter() - t0
+                    throughput = (
+                        cfg.batch_size * world_size * cfg.log_every_n_steps / elapsed
+                    )
+                    log.info(
+                        "step %8d | ep %d/%d | "
+                        "total %.4f  policy %.4f  value %.4f | "
+                        "lr %.2e | %.0f pos/s",
+                        global_step, epoch + 1, cfg.epochs,
+                        total_loss.item(), p_loss.item(), v_loss.item(),
+                        lr, throughput,
+                    )
+                    if not cfg.wandb_disabled:
+                        wandb.log(
+                            {
+                                "train/total_loss":  total_loss.item(),
+                                "train/policy_loss": p_loss.item(),
+                                "train/value_loss":  v_loss.item(),
+                                "train/lr":          lr,
+                                "train/throughput":  throughput,
+                                "epoch":             epoch,
+                            },
+                            step=global_step,
+                        )
+                    t0 = time.perf_counter()
+
+                # ── Step checkpoint ──────────────────────────────────────────────
+                if (
+                    is_main
+                    and cfg.checkpoint_every_n_steps > 0
+                    and global_step % cfg.checkpoint_every_n_steps == 0
+                ):
+                    save_checkpoint(
+                        checkpoint_dir, global_step, epoch,
+                        model, optimizer, scheduler, scaler,
+                        keep_last_n=cfg.keep_last_n_checkpoints,
+                    )
+
+            # ── End-of-epoch ──────────────────────────────────────────────────────
+            if is_main:
+                avg_p = epoch_p_loss / max(epoch_steps, 1)
+                avg_v = epoch_v_loss / max(epoch_steps, 1)
                 log.info(
-                    "step %8d | ep %d/%d | "
-                    "total %.4f  policy %.4f  value %.4f | "
-                    "lr %.2e | %.0f pos/s",
-                    global_step, epoch + 1, cfg.epochs,
-                    total_loss.item(), p_loss.item(), v_loss.item(),
-                    lr, throughput,
+                    "Epoch %d/%d complete — avg policy %.4f  avg value %.4f",
+                    epoch + 1, cfg.epochs, avg_p, avg_v,
                 )
                 if not cfg.wandb_disabled:
                     wandb.log(
                         {
-                            "train/total_loss":  total_loss.item(),
-                            "train/policy_loss": p_loss.item(),
-                            "train/value_loss":  v_loss.item(),
-                            "train/lr":          lr,
-                            "train/throughput":  throughput,
-                            "epoch":             epoch,
+                            "epoch/avg_policy_loss": avg_p,
+                            "epoch/avg_value_loss":  avg_v,
                         },
                         step=global_step,
                     )
-                t0 = time.perf_counter()
-
-            # ── Step checkpoint ──────────────────────────────────────────────
-            if (
-                is_main
-                and cfg.checkpoint_every_n_steps > 0
-                and global_step % cfg.checkpoint_every_n_steps == 0
-            ):
                 save_checkpoint(
-                    checkpoint_dir, global_step, epoch,
+                    checkpoint_dir, global_step, epoch + 1,
                     model, optimizer, scheduler, scaler,
                     keep_last_n=cfg.keep_last_n_checkpoints,
                 )
 
-        # ── End-of-epoch ──────────────────────────────────────────────────────
-        if is_main:
-            avg_p = epoch_p_loss / max(epoch_steps, 1)
-            avg_v = epoch_v_loss / max(epoch_steps, 1)
-            log.info(
-                "Epoch %d/%d complete — avg policy %.4f  avg value %.4f",
-                epoch + 1, cfg.epochs, avg_p, avg_v,
-            )
-            if not cfg.wandb_disabled:
-                wandb.log(
-                    {
-                        "epoch/avg_policy_loss": avg_p,
-                        "epoch/avg_value_loss":  avg_v,
-                    },
-                    step=global_step,
-                )
-            save_checkpoint(
-                checkpoint_dir, global_step, epoch + 1,
-                model, optimizer, scheduler, scaler,
-                keep_last_n=cfg.keep_last_n_checkpoints,
-            )
-
-    # ── Cleanup ───────────────────────────────────────────────────────────────
-    if is_main and not cfg.wandb_disabled:
-        wandb.finish()
-    _cleanup_ddp()
+    finally:
+        # Always shut down DataLoader workers before DDP teardown.
+        # Without this, worker processes become zombies on exception exit.
+        del loader
+        if is_main and not cfg.wandb_disabled:
+            wandb.finish()
+        _cleanup_ddp()
 
 
 # ─── CLI ─────────────────────────────────────────────────────────────────────

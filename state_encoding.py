@@ -117,12 +117,10 @@ def _bitboards_to_planes(bbs: np.ndarray, mirror: bool) -> np.ndarray:
         corresponding bit is set in bbs[n].
     """
     n = len(bbs)
-    # Convert each uint64 to 8 little-endian bytes: bit 0 (a1) ends up in
-    # byte 0, bit 63 (h8) in byte 7.  Explicit 'little' makes this portable.
-    buf = np.frombuffer(
-        b"".join(int(b).to_bytes(8, "little") for b in bbs),
-        dtype=np.uint8,
-    ).reshape(n, 8)
+    # Cast to explicit little-endian uint64 ('<u8') then reinterpret as bytes.
+    # Vectorised — no Python loop per element — and portable: '<u8' forces
+    # little-endian layout on any host so bit 0 (a1) always lands in byte 0.
+    buf = np.asarray(bbs, dtype="<u8").view(np.uint8).reshape(n, 8)
 
     # Unpack to (N, 64) with bitorder='little' so index 0 = bit 0 = square a1.
     planes = (
@@ -304,31 +302,19 @@ def encode_board(board: chess.Board) -> np.ndarray:
     p1_color: chess.Color = chess.BLACK if is_black else chess.WHITE
     p2_color: chess.Color = chess.WHITE if is_black else chess.BLACK
 
-    # ── 1. Collect up to T board positions (current first) ────────────────────
-    history: List[Optional[chess.Board]] = []
-    scratch = board.copy()  # mutable copy; original is never touched
-    history.append(scratch.copy(stack=False))  # lightweight copy, no move-stack needed
-
-    for _ in range(NUM_HISTORY_FRAMES - 1):
-        if not scratch.move_stack:
-            break
-        scratch.pop()
-        history.append(scratch.copy(stack=False))
-
-    # history[0] = current position, history[k] = k moves ago
-    # Remaining entries are implicitly None → zero planes (already allocated)
-
     # ── 2. Encode history frames ──────────────────────────────────────────────
-    # We also need repetition information; use the original stacked boards.
-    scratch_rep = board.copy()  # separate copy that retains the full stack
+    # Single mutable copy serves both piece-plane extraction and repetition
+    # queries — eliminates a second full board.copy() and the intermediate
+    # list of scratch.copy(stack=False) snapshots.
+    scratch = board.copy()
 
-    for frame_idx, hist_board in enumerate(history):
+    for frame_idx in range(NUM_HISTORY_FRAMES):
         base = frame_idx * PLANES_PER_FRAME  # 0, 14, 28, …
 
         # ── 2a. Piece planes (vectorised over 12 bitboards) ───────────────
         bbs = np.array(
-            [hist_board.pieces_mask(pt, p1_color) for pt in PIECE_ORDER]
-            + [hist_board.pieces_mask(pt, p2_color) for pt in PIECE_ORDER],
+            [scratch.pieces_mask(pt, p1_color) for pt in PIECE_ORDER]
+            + [scratch.pieces_mask(pt, p2_color) for pt in PIECE_ORDER],
             dtype=np.uint64,
         )  # shape (12,)
 
@@ -337,15 +323,19 @@ def encode_board(board: chess.Board) -> np.ndarray:
         planes[:, :, base : base + 12] = piece_planes.transpose(1, 2, 0)
 
         # ── 2b. Repetition planes ─────────────────────────────────────────
-        # is_repetition(n) returns True if the current position has appeared
-        # at least n times in the game history (including the current position).
-        if scratch_rep.is_repetition(2):
+        # is_repetition(n) returns True if the position at this ply appeared
+        # at least n times earlier in the game (move_stack intact on scratch).
+        if scratch.is_repetition(2):
             planes[:, :, base + 12] = 1.0
-        if scratch_rep.is_repetition(3):
+        if scratch.is_repetition(3):
             planes[:, :, base + 13] = 1.0
 
-        if scratch_rep.move_stack:
-            scratch_rep.pop()
+        # Advance to the previous position; stop when history is exhausted.
+        # Remaining frames are implicitly zero (array was zeroed at allocation).
+        if frame_idx + 1 < NUM_HISTORY_FRAMES:
+            if not scratch.move_stack:
+                break
+            scratch.pop()
 
     # ── 3. Scalar planes (broadcast constants) ────────────────────────────────
     scalar_base = TOTAL_PLANES - SCALAR_PLANES  # 112
