@@ -14,7 +14,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from core_types import ACTION_SPACE_SIZE, BOARD_SIZE, TOTAL_PLANES
+from ..core import ACTION_SPACE_SIZE, BOARD_SIZE, TOTAL_PLANES
 
 
 # ─── Residual Block ───────────────────────────────────────────────────────────

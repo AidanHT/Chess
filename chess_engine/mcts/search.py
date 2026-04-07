@@ -40,13 +40,8 @@ import chess
 import numpy as np
 import torch
 
-from core_types import ACTION_SPACE_SIZE, BOARD_SIZE, TOTAL_PLANES
-from model import ChessResNet
-from state_encoding import (
-    decode_move_perspective,
-    encode_board,
-    encode_move_perspective,
-)
+from ..core import ACTION_SPACE_SIZE, BOARD_SIZE, TOTAL_PLANES, decode_move_perspective, encode_board, encode_move_perspective
+from ..models import ChessResNet
 
 # ── Module constants ──────────────────────────────────────────────────────────
 

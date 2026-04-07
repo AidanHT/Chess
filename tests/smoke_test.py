@@ -31,16 +31,24 @@ import numpy as np
 import torch
 from torch.optim import AdamW
 
-from core_types import ACTION_SPACE_SIZE, BOARD_SIZE, TOTAL_PLANES
-from mcts import MCTS
-from model import ChessResNet
-from state_encoding import (
+import sys
+from pathlib import Path
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from chess_engine import (
+    ACTION_SPACE_SIZE,
+    BOARD_SIZE,
+    TOTAL_PLANES,
+    ChessResNet,
+    MCTS,
+    UCIEngine,
     decode_move_perspective,
     encode_board,
     encode_move_perspective,
 )
-from train import compute_loss
-from uci_engine import UCIEngine
+from chess_engine.training.train import compute_loss
 
 
 # --- Shared constants ---------------------------------------------------------

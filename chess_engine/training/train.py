@@ -26,14 +26,20 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import OneCycleLR
 
 try:
+    from tqdm import tqdm
+    _TQDM_AVAILABLE = True
+except ImportError:
+    _TQDM_AVAILABLE = False
+
+try:
     import wandb
     _WANDB_AVAILABLE = True
 except ImportError:
     wandb = None  # type: ignore[assignment]
     _WANDB_AVAILABLE = False
 
-from data_pipeline import find_pgn_files, make_dataloader
-from model import ChessResNet
+from ..data import find_pgn_files, make_dataloader
+from ..models import ChessResNet
 
 log = logging.getLogger(__name__)
 
@@ -44,9 +50,9 @@ log = logging.getLogger(__name__)
 class TrainConfig:
     # ── Data ──────────────────────────────────────────────────────────────────
     data_dir:        str = "data/pgn"
-    num_workers:     int = 4
+    num_workers:     int = 8         # Increase workers to keep GPU fed
     batch_size:      int = 512       # per-GPU batch size
-    prefetch_factor: int = 2
+    prefetch_factor: int = 4         # Increase buffering to reduce GPU idle
     # IterableDataset has no __len__; this estimate sizes OneCycleLR.
     steps_per_epoch: int = 50_000
 
@@ -231,9 +237,13 @@ def train(cfg: TrainConfig, resume_from: Optional[str] = None) -> None:
     if is_main:
         logging.basicConfig(
             level=logging.INFO,
-            format="%(asctime)s %(levelname)-8s %(message)s",
-            datefmt="%H:%M:%S",
+            format="%(message)s",
         )
+        log.info("")
+        log.info("┌" + "─" * 78 + "┐")
+        log.info("│" + " AlphaZero Chess Engine — Training Started ".center(78) + "│")
+        log.info("└" + "─" * 78 + "┘")
+        log.info("")
 
     # ── Data — shard PGN files across DDP ranks ───────────────────────────────
     # Each rank trains on a disjoint, round-robin slice of PGN files, preventing
@@ -251,10 +261,9 @@ def train(cfg: TrainConfig, resume_from: Optional[str] = None) -> None:
         )
 
     if is_main:
-        log.info(
-            "%d PGN files total; %d assigned to rank 0",
-            len(all_files), len(rank_files),
-        )
+        log.info(f"  📁 Loaded {len(all_files)} PGN files ({len(rank_files)} for rank 0)")
+        log.info(f"  🎯 Batch size: {cfg.batch_size} │ Workers: {cfg.num_workers} │ Prefetch: {cfg.prefetch_factor}")
+        log.info("")
 
     loader = make_dataloader(
         rank_files,
@@ -302,7 +311,11 @@ def train(cfg: TrainConfig, resume_from: Optional[str] = None) -> None:
         anneal_strategy="cos",
     )
 
-    scaler = torch.cuda.amp.GradScaler(enabled=cfg.amp)
+    # Use new GradScaler API (PyTorch >= 2.0) if available
+    if cfg.amp and hasattr(torch.amp, 'GradScaler') and device.type == 'cuda':
+        scaler = torch.amp.GradScaler(device.type, enabled=True)
+    else:
+        scaler = torch.cuda.amp.GradScaler(enabled=cfg.amp)
 
     # ── Resume ────────────────────────────────────────────────────────────────
     global_step = 0
@@ -328,13 +341,29 @@ def train(cfg: TrainConfig, resume_from: Optional[str] = None) -> None:
     # ── Epoch loop ────────────────────────────────────────────────────────────
     try:
         for epoch in range(start_epoch, cfg.epochs):
+            if is_main:
+                log.info(f"\n🔄 Starting Epoch {epoch+1}/{cfg.epochs}...")
+
             model.train()
             epoch_p_loss = 0.0
             epoch_v_loss = 0.0
             epoch_steps  = 0
             t0           = time.perf_counter()
 
-            for board, policy_target, value_target in loader:
+            # Wrap dataloader with progress bar if available
+            dataloader_iter = loader
+            use_pbar = is_main and _TQDM_AVAILABLE
+            if use_pbar:
+                dataloader_iter = tqdm(
+                    loader,
+                    desc=f"  Epoch {epoch+1:2d}/{cfg.epochs}",
+                    unit="batch",
+                    ncols=120,
+                    bar_format="{desc} │ {bar:40} │ {postfix}",
+                    dynamic_ncols=True,
+                )
+
+            for board, policy_target, value_target in dataloader_iter:
                 # Non-blocking transfers overlap with previous kernel execution.
                 board         = board.to(device, non_blocking=True)          # (B, 119, 8, 8)
                 policy_target = policy_target.to(device, non_blocking=True)  # (B, 4672)
@@ -373,21 +402,29 @@ def train(cfg: TrainConfig, resume_from: Optional[str] = None) -> None:
                 epoch_p_loss += p_loss.item()
                 epoch_v_loss += v_loss.item()
 
-                # ── Step-level logging ───────────────────────────────────────────
+                # ── Real-time progress bar updates ─────────────────────────────────
+                if is_main and use_pbar:
+                    # Update progress bar every step with quick stats
+                    if global_step % 10 == 0:  # Update every 10 steps for responsiveness
+                        lr        = scheduler.get_last_lr()[0]
+                        elapsed   = time.perf_counter() - t0
+                        throughput = (
+                            cfg.batch_size * world_size * 10 / elapsed if elapsed > 0 else 0
+                        )
+                        postfix_str = (
+                            f"Step {global_step:7d} │ "
+                            f"Loss: {total_loss.item():.4f} │ "
+                            f"P: {p_loss.item():.4f} │ "
+                            f"V: {v_loss.item():.4f} │ "
+                            f"LR: {lr:.2e} │ "
+                            f"{throughput:.0f} pos/s"
+                        )
+                        dataloader_iter.set_postfix_str(postfix_str)
+                        t0 = time.perf_counter()
+
+                # ── Step-level console logging ─────────────────────────────────────
                 if is_main and global_step % cfg.log_every_n_steps == 0:
-                    lr        = scheduler.get_last_lr()[0]
-                    elapsed   = time.perf_counter() - t0
-                    throughput = (
-                        cfg.batch_size * world_size * cfg.log_every_n_steps / elapsed
-                    )
-                    log.info(
-                        "step %8d | ep %d/%d | "
-                        "total %.4f  policy %.4f  value %.4f | "
-                        "lr %.2e | %.0f pos/s",
-                        global_step, epoch + 1, cfg.epochs,
-                        total_loss.item(), p_loss.item(), v_loss.item(),
-                        lr, throughput,
-                    )
+
                     if _WANDB_AVAILABLE and not cfg.wandb_disabled:
                         wandb.log(
                             {
@@ -418,9 +455,10 @@ def train(cfg: TrainConfig, resume_from: Optional[str] = None) -> None:
             if is_main:
                 avg_p = epoch_p_loss / max(epoch_steps, 1)
                 avg_v = epoch_v_loss / max(epoch_steps, 1)
+                log.info("")
                 log.info(
-                    "Epoch %d/%d complete — avg policy %.4f  avg value %.4f",
-                    epoch + 1, cfg.epochs, avg_p, avg_v,
+                    f"  ✓ Epoch {epoch + 1}/{cfg.epochs} complete │ "
+                    f"Avg Policy Loss: {avg_p:.4f} │ Avg Value Loss: {avg_v:.4f}"
                 )
                 if _WANDB_AVAILABLE and not cfg.wandb_disabled:
                     wandb.log(
@@ -436,10 +474,24 @@ def train(cfg: TrainConfig, resume_from: Optional[str] = None) -> None:
                     keep_last_n=cfg.keep_last_n_checkpoints,
                 )
 
+        if is_main:
+            log.info("")
+            log.info("┌" + "─" * 78 + "┐")
+            log.info("│" + " Training Complete! ".center(78) + "│")
+            log.info("│" + f"Final checkpoint: {str(_ckpt_path(checkpoint_dir, global_step))[:70]}".ljust(79) + "│")
+            log.info("└" + "─" * 78 + "┘")
+            log.info("")
+
     finally:
         # Always shut down DataLoader workers before DDP teardown.
         # Without this, worker processes become zombies on exception exit.
         del loader
+        # Close progress bar if it exists
+        try:
+            if is_main and _TQDM_AVAILABLE:
+                dataloader_iter.close()
+        except (NameError, AttributeError, TypeError):
+            pass
         if is_main and _WANDB_AVAILABLE and not cfg.wandb_disabled:
             wandb.finish()
         _cleanup_ddp()

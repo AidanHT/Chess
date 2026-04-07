@@ -30,9 +30,9 @@ import chess
 import numpy as np
 import torch
 
-from model import ChessResNet
-from mcts import MCTS
-from state_encoding import decode_move_perspective, encode_move_perspective
+from ..core import decode_move_perspective, encode_move_perspective
+from ..mcts import MCTS
+from ..models import ChessResNet
 
 # ── Logging (stderr only — UCI traffic must stay on stdout) ───────────────────
 

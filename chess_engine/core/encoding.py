@@ -54,7 +54,7 @@ from typing import Dict, Final, List, Optional, Tuple
 import chess
 import numpy as np
 
-from core_types import (
+from .types import (
     ACTION_SPACE_SIZE,
     BOARD_SIZE,
     MAX_QUEEN_DIST,
