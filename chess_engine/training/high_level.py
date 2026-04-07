@@ -52,8 +52,8 @@ def create_high_level_config(masters_dir: str, broad_dir: str | None = None) -> 
 
         # Checkpointing
         checkpoint_dir="checkpoints",
-        checkpoint_every_n_steps=5_000,
-        keep_last_n_checkpoints=5,
+        checkpoint_every_n_steps=1_000,  # Save every 1000 steps
+        keep_last_n_checkpoints=10,      # Keep last 10 checkpoints (~10k steps worth)
 
         # Logging
         log_every_n_steps=100,
@@ -103,6 +103,12 @@ def main_with_args() -> None:
         default=5e-4,
         help="Learning rate (default: 5e-4)"
     )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to checkpoint to resume from (e.g., checkpoints/step_0001000.pt)"
+    )
 
     args = parser.parse_args()
 
@@ -131,10 +137,12 @@ def main_with_args() -> None:
     print(f"  Batch size: {config.batch_size}")
     print(f"  Learning rate: {config.lr}")
     print(f"  AMP: {config.amp}")
+    if args.resume:
+        print(f"  Resuming from: {args.resume}")
     print()
 
     # Delegate to training loop
-    train_fn(config)
+    train_fn(config, resume_from=args.resume)
 
 
 if __name__ == "__main__":

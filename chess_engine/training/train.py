@@ -75,8 +75,8 @@ class TrainConfig:
 
     # ── Checkpointing ─────────────────────────────────────────────────────────
     checkpoint_dir:           str = "checkpoints"
-    checkpoint_every_n_steps: int = 10_000  # 0 = epoch-only
-    keep_last_n_checkpoints:  int = 3
+    checkpoint_every_n_steps: int = 1_000   # Save every 1000 steps (0 = epoch-only)
+    keep_last_n_checkpoints:  int = 10      # Keep last 10 checkpoints
 
     # ── Logging ───────────────────────────────────────────────────────────────
     log_every_n_steps: int          = 100
@@ -311,11 +311,7 @@ def train(cfg: TrainConfig, resume_from: Optional[str] = None) -> None:
         anneal_strategy="cos",
     )
 
-    # Use new GradScaler API (PyTorch >= 2.0) if available
-    if cfg.amp and hasattr(torch.amp, 'GradScaler') and device.type == 'cuda':
-        scaler = torch.amp.GradScaler(device.type, enabled=True)
-    else:
-        scaler = torch.cuda.amp.GradScaler(enabled=cfg.amp)
+    scaler = torch.cuda.amp.GradScaler(enabled=cfg.amp)
 
     # ── Resume ────────────────────────────────────────────────────────────────
     global_step = 0
