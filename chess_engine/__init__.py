@@ -9,7 +9,15 @@ from .core.types import (
     PolicyArray,
     ValueScalar,
 )
-from .data.pipeline import ChessDataset, find_pgn_files, make_dataloader, stream_pgn_file
+from .data.pipeline import (
+    ChessDataset,
+    ChessPuzzleDataset,
+    CombinedDataset,
+    find_pgn_files,
+    make_combined_dataloader,
+    make_dataloader,
+    stream_pgn_file,
+)
 from .engine.uci import UCIEngine
 from .mcts.search import MCTS
 from .models.resnet import ChessResNet
@@ -32,8 +40,11 @@ __all__ = [
     # Data
     "stream_pgn_file",
     "ChessDataset",
+    "ChessPuzzleDataset",
+    "CombinedDataset",
     "find_pgn_files",
     "make_dataloader",
+    "make_combined_dataloader",
     # Models
     "ChessResNet",
     # MCTS

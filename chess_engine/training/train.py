@@ -38,7 +38,7 @@ except ImportError:
     wandb = None  # type: ignore[assignment]
     _WANDB_AVAILABLE = False
 
-from ..data import find_pgn_files, make_dataloader
+from ..data import find_pgn_files, make_dataloader, make_combined_dataloader
 from ..models import ChessResNet
 
 log = logging.getLogger(__name__)
@@ -77,6 +77,16 @@ class TrainConfig:
     checkpoint_dir:           str = "checkpoints"
     checkpoint_every_n_steps: int = 1_000   # Save every 1000 steps (0 = epoch-only)
     keep_last_n_checkpoints:  int = 10      # Keep last 10 checkpoints
+
+    # ── Puzzle mixing ─────────────────────────────────────────────────────────
+    puzzle_dir:    Optional[str] = None   # Path to lichess_db_puzzle.csv; None = no puzzles
+    puzzle_ratio:  float         = 0.2   # Fraction of samples drawn from puzzles
+    min_puzzle_rating: int       = 1200  # Skip trivially easy puzzles
+
+    # ── Fine-tune mode ────────────────────────────────────────────────────────
+    # When True, --resume loads model weights only (fresh optimizer + scheduler).
+    # Use this for Phase 2 fine-tuning on elite/puzzle data after Phase 1.
+    fine_tune: bool = False
 
     # ── Logging ───────────────────────────────────────────────────────────────
     log_every_n_steps: int          = 100
@@ -202,17 +212,30 @@ def load_checkpoint(
     optimizer: torch.optim.Optimizer,
     scheduler: object,
     scaler:    torch.cuda.amp.GradScaler,
+    *,
+    model_only: bool = False,
 ) -> tuple[int, int]:
-    """Restore training state in-place. Returns (global_step, epoch)."""
+    """
+    Restore training state in-place. Returns (global_step, epoch).
+
+    Parameters
+    ----------
+    model_only :
+        When True, load only model weights and skip optimizer / scheduler /
+        scaler state.  Use this for fine-tuning (Phase 2) so the new training
+        phase starts with a fresh learning-rate schedule.
+    """
     ckpt = torch.load(path, map_location="cpu", weights_only=True)
     raw  = model.module if isinstance(model, DDP) else model
     raw.load_state_dict(ckpt["model"])
-    optimizer.load_state_dict(ckpt["optimizer"])
-    scheduler.load_state_dict(ckpt["scheduler"])
-    scaler.load_state_dict(ckpt["scaler"])
+    if not model_only:
+        optimizer.load_state_dict(ckpt["optimizer"])
+        scheduler.load_state_dict(ckpt["scheduler"])
+        scaler.load_state_dict(ckpt["scaler"])
     log.info(
-        "Resumed from %s  (step %d, epoch %d)",
+        "Loaded weights from %s  (step %d, epoch %d)%s",
         path, ckpt["global_step"], ckpt["epoch"],
+        " [model weights only — fresh optimizer]" if model_only else "",
     )
     return ckpt["global_step"], ckpt["epoch"]
 
@@ -265,15 +288,32 @@ def train(cfg: TrainConfig, resume_from: Optional[str] = None) -> None:
         log.info(f"  🎯 Batch size: {cfg.batch_size} │ Workers: {cfg.num_workers} │ Prefetch: {cfg.prefetch_factor}")
         log.info("")
 
-    loader = make_dataloader(
-        rank_files,
-        batch_size=cfg.batch_size,
-        num_workers=cfg.num_workers,
-        prefetch_factor=cfg.prefetch_factor,
-        shuffle_files=True,
-        seed=cfg.seed + rank,   # different seed per rank for variety
-        pin_memory=torch.cuda.is_available(),
-    )
+    if cfg.puzzle_dir is not None:
+        puzzle_path = cfg.puzzle_dir
+        if is_main:
+            log.info(f"  🧩 Puzzle mixing enabled — CSV: {puzzle_path}  ratio: {cfg.puzzle_ratio}")
+        loader = make_combined_dataloader(
+            rank_files,
+            puzzle_path,
+            puzzle_ratio=cfg.puzzle_ratio,
+            batch_size=cfg.batch_size,
+            num_workers=cfg.num_workers,
+            prefetch_factor=cfg.prefetch_factor,
+            shuffle_files=True,
+            seed=cfg.seed + rank,
+            pin_memory=torch.cuda.is_available(),
+            min_puzzle_rating=cfg.min_puzzle_rating,
+        )
+    else:
+        loader = make_dataloader(
+            rank_files,
+            batch_size=cfg.batch_size,
+            num_workers=cfg.num_workers,
+            prefetch_factor=cfg.prefetch_factor,
+            shuffle_files=True,
+            seed=cfg.seed + rank,
+            pin_memory=torch.cuda.is_available(),
+        )
 
     # ── Model ─────────────────────────────────────────────────────────────────
     model: torch.nn.Module = ChessResNet(
@@ -318,8 +358,15 @@ def train(cfg: TrainConfig, resume_from: Optional[str] = None) -> None:
     start_epoch = 0
     if resume_from:
         global_step, start_epoch = load_checkpoint(
-            Path(resume_from), model, optimizer, scheduler, scaler
+            Path(resume_from), model, optimizer, scheduler, scaler,
+            model_only=cfg.fine_tune,
         )
+        if cfg.fine_tune:
+            # Fine-tune starts a fresh LR schedule from step 0.
+            global_step = 0
+            start_epoch = 0
+            if is_main:
+                log.info("Fine-tune mode: optimizer and LR schedule reset to epoch 0.")
 
     # ── wandb (rank 0 only) ───────────────────────────────────────────────────
     if is_main and _WANDB_AVAILABLE and not cfg.wandb_disabled:
@@ -530,6 +577,14 @@ def _build_parser() -> argparse.ArgumentParser:
     g.add_argument("--checkpoint_every_n_steps", type=int, default=d.checkpoint_every_n_steps)
     g.add_argument("--keep_last_n_checkpoints",  type=int, default=d.keep_last_n_checkpoints)
 
+    g = p.add_argument_group("puzzle mixing")
+    g.add_argument("--puzzle_dir",        default=d.puzzle_dir,
+                   help="Path to lichess_db_puzzle.csv (enables puzzle mixing).")
+    g.add_argument("--puzzle_ratio",      type=float, default=d.puzzle_ratio,
+                   help="Fraction of samples drawn from puzzles (default 0.2).")
+    g.add_argument("--min_puzzle_rating", type=int, default=d.min_puzzle_rating,
+                   help="Ignore puzzles below this Lichess rating (default 1200).")
+
     g = p.add_argument_group("logging")
     g.add_argument("--log_every_n_steps", type=int, default=d.log_every_n_steps)
     g.add_argument("--wandb_project",     default=d.wandb_project)
@@ -537,10 +592,12 @@ def _build_parser() -> argparse.ArgumentParser:
     g.add_argument("--wandb_disabled",    action="store_true")
 
     g = p.add_argument_group("misc")
-    g.add_argument("--seed",    type=int, default=d.seed)
-    g.add_argument("--no_amp",  action="store_true", help="Disable Automatic Mixed Precision.")
-    g.add_argument("--compile", action="store_true", help="torch.compile the model (PyTorch ≥ 2).")
-    g.add_argument("--resume",  default=None, help="Path to a checkpoint to resume from.")
+    g.add_argument("--seed",       type=int, default=d.seed)
+    g.add_argument("--no_amp",     action="store_true", help="Disable Automatic Mixed Precision.")
+    g.add_argument("--compile",    action="store_true", help="torch.compile the model (PyTorch ≥ 2).")
+    g.add_argument("--resume",     default=None, help="Path to a checkpoint to resume from.")
+    g.add_argument("--fine_tune",  action="store_true",
+                   help="Load model weights only from --resume; reset optimizer and LR schedule.")
 
     return p
 
@@ -565,6 +622,10 @@ if __name__ == "__main__":
         checkpoint_dir=args.checkpoint_dir,
         checkpoint_every_n_steps=args.checkpoint_every_n_steps,
         keep_last_n_checkpoints=args.keep_last_n_checkpoints,
+        puzzle_dir=args.puzzle_dir,
+        puzzle_ratio=args.puzzle_ratio,
+        min_puzzle_rating=args.min_puzzle_rating,
+        fine_tune=args.fine_tune,
         log_every_n_steps=args.log_every_n_steps,
         wandb_project=args.wandb_project,
         wandb_run_name=args.wandb_run_name,
