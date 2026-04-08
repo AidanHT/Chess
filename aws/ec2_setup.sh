@@ -59,21 +59,28 @@ mkdir -p "$DATA_DIR" "$HOME/data/puzzles" "$CKPT_DIR"
 echo "  [S3] Syncing small PGN files ..."
 aws s3 sync "s3://$BUCKET/data/pgn/" "$DATA_DIR/" --no-progress
 
-# Large PGN direct from Lichess (data center speeds, ~2-5 min for 7.6 GB)
+# Large PGN: pull from S3 if cached, otherwise stream from Lichess then cache to S3
 LARGE_PGN="$DATA_DIR/lichess_db_standard_rated_2026-03.pgn"
+LARGE_PGN_S3="s3://$BUCKET/data/pgn/lichess_db_standard_rated_2026-03.pgn"
 if [ ! -f "$LARGE_PGN" ]; then
-    echo "  [Lichess] Downloading + decompressing lichess_db_standard_rated_2026-03.pgn (streaming) ..."
-    pip install --quiet zstandard
-    # Stream directly through decompression — never writes .zst to disk
-    wget -qO- \
-        "https://database.lichess.org/standard/lichess_db_standard_rated_2026-03.pgn.zst" \
-        | python3 -c "
+    if aws s3 ls "$LARGE_PGN_S3" &>/dev/null; then
+        echo "  [S3] Downloading large PGN from S3 cache (~2-3 min) ..."
+        aws s3 cp "$LARGE_PGN_S3" "$LARGE_PGN" --no-progress
+    else
+        echo "  [Lichess] Streaming + decompressing lichess_db_standard_rated_2026-03.pgn (~20 min) ..."
+        pip install --quiet zstandard
+        wget -qO- \
+            "https://database.lichess.org/standard/lichess_db_standard_rated_2026-03.pgn.zst" \
+            | python3 -c "
 import zstandard, sys
 ctx = zstandard.ZstdDecompressor()
 with open('$LARGE_PGN', 'wb') as fout:
     ctx.copy_stream(sys.stdin.buffer, fout)
 print('  Done: $LARGE_PGN')
 "
+        echo "  [S3] Caching large PGN to S3 for future relaunches ..."
+        aws s3 cp "$LARGE_PGN" "$LARGE_PGN_S3" --no-progress
+    fi
 else
     echo "  Large PGN already present — skipping."
 fi
