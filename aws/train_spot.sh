@@ -51,10 +51,9 @@ echo "  Phase 1 : All PGN data  (${P1_EPOCHS} epochs, lr=${P1_LR})"
 echo "  Phase 2 : Elite + Puzzles (${P2_EPOCHS} epochs, lr=${P2_LR}, fine-tune)"
 echo ""
 
-# ── Activate conda env ────────────────────────────────────────────────────────
-# shellcheck disable=SC1090
-source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate pytorch
+# ── Activate DLAMI PyTorch virtualenv ────────────────────────────────────────
+# shellcheck disable=SC1091
+source /opt/pytorch/bin/activate
 
 # ── Export W&B key if set ─────────────────────────────────────────────────────
 [ -n "${WANDB_API_KEY:-}" ] && export WANDB_API_KEY

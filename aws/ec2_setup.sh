@@ -32,15 +32,14 @@ nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 echo ""
 
 # ── Activate DLAMI PyTorch environment ───────────────────────────────────────
-echo "[2/5] Activating PyTorch conda environment ..."
+echo "[2/5] Activating PyTorch environment ..."
 
-# DLAMI uses a conda env named 'pytorch'
-# shellcheck disable=SC1090
-source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate pytorch
-echo "  Python: $(python --version)"
-echo "  PyTorch: $(python -c 'import torch; print(torch.__version__)')"
-echo "  CUDA available: $(python -c 'import torch; print(torch.cuda.is_available())')"
+# DLAMI (PyTorch 2.7+) uses a virtualenv at /opt/pytorch/
+# shellcheck disable=SC1091
+source /opt/pytorch/bin/activate
+echo "  Python: $(python3 --version)"
+echo "  PyTorch: $(python3 -c 'import torch; print(torch.__version__)')"
+echo "  CUDA available: $(python3 -c 'import torch; print(torch.cuda.is_available())')"
 
 # ── Install missing packages ──────────────────────────────────────────────────
 echo ""
