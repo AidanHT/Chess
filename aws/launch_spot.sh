@@ -17,7 +17,7 @@ source "$ENV_FILE"
 
 REGION="${AWS_REGION:-us-east-1}"
 INSTANCE_TYPE="g5.2xlarge"
-VOLUME_SIZE=150   # GB — holds 7.9 GB data + OS + env + checkpoints
+VOLUME_SIZE=300   # GB — 120 GB large PGN + OS/env + small PGNs + checkpoints
 IAM_PROFILE="chess-training-role"
 
 echo "=== Chess Engine: Launch EC2 Spot Instance ==="
@@ -43,8 +43,9 @@ AMI_ID=$(aws ec2 describe-images \
     --region "$REGION" \
     --owners amazon \
     --filters \
-        "Name=name,Values=Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.4 (Ubuntu 22.04)*" \
+        "Name=name,Values=Deep Learning OSS Nvidia Driver AMI GPU PyTorch*Ubuntu 22.04*" \
         "Name=state,Values=available" \
+        "Name=architecture,Values=x86_64" \
     --query "sort_by(Images, &CreationDate)[-1].ImageId" \
     --output text)
 
