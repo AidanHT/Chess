@@ -62,19 +62,17 @@ aws s3 sync "s3://$BUCKET/data/pgn/" "$DATA_DIR/" --no-progress
 # Large PGN direct from Lichess (data center speeds, ~2-5 min for 7.6 GB)
 LARGE_PGN="$DATA_DIR/lichess_db_standard_rated_2026-03.pgn"
 if [ ! -f "$LARGE_PGN" ]; then
-    echo "  [Lichess] Downloading lichess_db_standard_rated_2026-03.pgn (7.6 GB) ..."
+    echo "  [Lichess] Downloading + decompressing lichess_db_standard_rated_2026-03.pgn (streaming) ..."
     pip install --quiet zstandard
-    wget -q --show-progress \
-        -O "$DATA_DIR/lichess_db_standard_rated_2026-03.pgn.zst" \
-        "https://database.lichess.org/standard/lichess_db_standard_rated_2026-03.pgn.zst"
-    echo "  Decompressing ..."
-    python3 -c "
-import zstandard, pathlib
-src = pathlib.Path('$DATA_DIR/lichess_db_standard_rated_2026-03.pgn.zst')
-dst = src.with_suffix('')
-zstandard.ZstdDecompressor().copy_stream(open(src,'rb'), open(dst,'wb'))
-src.unlink()
-print('  Done:', dst)
+    # Stream directly through decompression — never writes .zst to disk
+    wget -qO- \
+        "https://database.lichess.org/standard/lichess_db_standard_rated_2026-03.pgn.zst" \
+        | python3 -c "
+import zstandard, sys
+ctx = zstandard.ZstdDecompressor()
+with open('$LARGE_PGN', 'wb') as fout:
+    ctx.copy_stream(sys.stdin.buffer, fout)
+print('  Done: $LARGE_PGN')
 "
 else
     echo "  Large PGN already present — skipping."
@@ -83,18 +81,16 @@ fi
 # Puzzle database direct from Lichess
 PUZZLE_CSV="$HOME/data/puzzles/lichess_db_puzzle.csv"
 if [ ! -f "$PUZZLE_CSV" ]; then
-    echo "  [Lichess] Downloading puzzle database (~500 MB compressed) ..."
-    wget -q --show-progress \
-        -O "${PUZZLE_CSV}.zst" \
-        "https://database.lichess.org/lichess_db_puzzle.csv.zst"
-    echo "  Decompressing ..."
-    python3 -c "
-import zstandard, pathlib
-src = pathlib.Path('${PUZZLE_CSV}.zst')
-dst = src.with_suffix('')
-zstandard.ZstdDecompressor().copy_stream(open(src,'rb'), open(dst,'wb'))
-src.unlink()
-print('  Done:', dst)
+    echo "  [Lichess] Downloading + decompressing puzzle database (streaming) ..."
+    # Stream directly through decompression — never writes .zst to disk
+    wget -qO- \
+        "https://database.lichess.org/lichess_db_puzzle.csv.zst" \
+        | python3 -c "
+import zstandard, sys
+ctx = zstandard.ZstdDecompressor()
+with open('$PUZZLE_CSV', 'wb') as fout:
+    ctx.copy_stream(sys.stdin.buffer, fout)
+print('  Done: $PUZZLE_CSV')
 "
 else
     echo "  Puzzle CSV already present — skipping."
