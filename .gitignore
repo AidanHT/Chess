@@ -28,7 +28,7 @@ runs/
 wandb/
 
 # Training data & self-play games
-data/
+/data/
 games/
 *.pgn
 *.npz
