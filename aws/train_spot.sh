@@ -114,6 +114,7 @@ echo ""
 
 python train_engine.py \
     --data_dir "$DATA_DIR" \
+    --checkpoint_dir "$CKPT_DIR" \
     --batch_size 1024 \
     --num_workers 8 \
     --prefetch_factor 8 \
@@ -185,6 +186,7 @@ P2_LOG="$HOME/training_phase2.log"
 # shellcheck disable=SC2086
 python train_engine.py \
     --data_dir "$P2_DATA_DIR" \
+    --checkpoint_dir "$CKPT_DIR" \
     $P2_PUZZLE_ARGS \
     --batch_size 1024 \
     --num_workers 8 \

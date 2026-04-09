@@ -53,7 +53,9 @@ class TrainConfig:
     num_workers:     int = 8         # Increase workers to keep GPU fed
     batch_size:      int = 512       # per-GPU batch size
     prefetch_factor: int = 4         # Increase buffering to reduce GPU idle
-    # IterableDataset has no __len__; this estimate sizes OneCycleLR.
+    # Optimiser steps per epoch. The inner loop breaks after this many steps so
+    # epochs have a fixed length regardless of the underlying IterableDataset
+    # stream size. Also sizes OneCycleLR's total_steps = epochs * steps_per_epoch.
     steps_per_epoch: int = 50_000
 
     # ── Model ─────────────────────────────────────────────────────────────────
@@ -372,6 +374,28 @@ def train(cfg: TrainConfig, resume_from: Optional[str] = None) -> None:
             start_epoch = 0
             if is_main:
                 log.info("Fine-tune mode: optimizer and LR schedule reset to epoch 0.")
+        else:
+            # Rebuild OneCycleLR so its schedule targets the *remaining* work,
+            # not whatever the original launch used. Without this, a resumed run
+            # inherits the stale scheduler state from the checkpoint — which may
+            # have been sized against a different --steps_per_epoch / --epochs
+            # combo, causing the LR curve to end early or raise once global_step
+            # exceeds the old total_steps. The new schedule warms up fresh from
+            # initial_lr → max_lr → cosine anneal over the remaining epochs.
+            remaining_epochs = max(cfg.epochs - start_epoch, 1)
+            scheduler = OneCycleLR(
+                optimizer,
+                max_lr=cfg.lr,
+                total_steps=remaining_epochs * cfg.steps_per_epoch,
+                pct_start=cfg.pct_start,
+                anneal_strategy="cos",
+            )
+            if is_main:
+                log.info(
+                    "Rebuilt OneCycleLR for resume: %d remaining epochs × %d steps = %d total",
+                    remaining_epochs, cfg.steps_per_epoch,
+                    remaining_epochs * cfg.steps_per_epoch,
+                )
 
     # ── wandb (rank 0 only) ───────────────────────────────────────────────────
     if is_main and _WANDB_AVAILABLE and not cfg.wandb_disabled:
@@ -499,6 +523,12 @@ def train(cfg: TrainConfig, resume_from: Optional[str] = None) -> None:
                         keep_last_n=cfg.keep_last_n_checkpoints,
                     )
 
+                # ── Epoch-length cap ─────────────────────────────────────────────
+                # IterableDataset has no fixed length, so bound the epoch by
+                # cfg.steps_per_epoch to match OneCycleLR's total_steps budget.
+                if epoch_steps >= cfg.steps_per_epoch:
+                    break
+
             # ── End-of-epoch ──────────────────────────────────────────────────────
             if is_main:
                 avg_p = epoch_p_loss / max(epoch_steps, 1)
@@ -560,7 +590,8 @@ def _build_parser() -> argparse.ArgumentParser:
     g.add_argument("--batch_size",      type=int, default=d.batch_size)
     g.add_argument("--prefetch_factor", type=int, default=d.prefetch_factor)
     g.add_argument("--steps_per_epoch", type=int, default=d.steps_per_epoch,
-                   help="Estimated optimiser steps/epoch (used to size OneCycleLR).")
+                   help="Optimiser steps per epoch (caps the inner loop and "
+                        "sizes OneCycleLR's total_steps).")
 
     g = p.add_argument_group("model")
     g.add_argument("--num_blocks",  type=int, default=d.num_blocks)
