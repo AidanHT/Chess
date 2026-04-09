@@ -218,3 +218,9 @@ echo "  Phase 2 log : s3://$BUCKET/logs/phase2-${STAMP}.log"
 echo ""
 echo "From your local machine:"
 echo "  bash aws/download_results.sh"
+
+# ── Auto-terminate instance ──────────────────────────────────────────────────
+echo ""
+echo "Auto-terminating instance in 60 seconds ..."
+sleep 60
+sudo shutdown -h now
