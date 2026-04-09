@@ -227,6 +227,11 @@ def load_checkpoint(
     """
     ckpt = torch.load(path, map_location="cpu", weights_only=True)
     raw  = model.module if isinstance(model, DDP) else model
+    # Unwrap torch.compile wrapper (OptimizedModule) to get the original module.
+    # This handles the case where the checkpoint was saved without --compile
+    # (plain keys) but the current model is compiled (_orig_mod.* keys).
+    if hasattr(raw, "_orig_mod"):
+        raw = raw._orig_mod
     raw.load_state_dict(ckpt["model"])
     if not model_only:
         optimizer.load_state_dict(ckpt["optimizer"])
