@@ -229,12 +229,21 @@ def load_checkpoint(
     """
     ckpt = torch.load(path, map_location="cpu", weights_only=True)
     raw  = model.module if isinstance(model, DDP) else model
-    # Unwrap torch.compile wrapper (OptimizedModule) to get the original module.
-    # This handles the case where the checkpoint was saved without --compile
-    # (plain keys) but the current model is compiled (_orig_mod.* keys).
+    # Unwrap torch.compile wrapper (OptimizedModule) to get the original module,
+    # so loading works regardless of whether the *current* run uses --compile.
     if hasattr(raw, "_orig_mod"):
         raw = raw._orig_mod
-    raw.load_state_dict(ckpt["model"])
+    # Normalise checkpoint keys: if the checkpoint was saved from a compiled
+    # model, its keys are prefixed with "_orig_mod." (since the OptimizedModule
+    # holds the real module under that submodule name). Strip the prefix so the
+    # state dict loads cleanly onto the unwrapped raw module.
+    state_dict = ckpt["model"]
+    if any(k.startswith("_orig_mod.") for k in state_dict):
+        state_dict = {
+            (k[len("_orig_mod."):] if k.startswith("_orig_mod.") else k): v
+            for k, v in state_dict.items()
+        }
+    raw.load_state_dict(state_dict)
     if not model_only:
         optimizer.load_state_dict(ckpt["optimizer"])
         scheduler.load_state_dict(ckpt["scheduler"])
