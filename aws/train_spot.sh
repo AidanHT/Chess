@@ -37,13 +37,16 @@ PROJECT_DIR="$HOME/chess-engine"
 LOG_FILE="$HOME/training.log"
 
 # Phase configuration
+# Steps-per-epoch are sized so that positions/epoch stays ~constant with bs=4096:
+#   P1: 12500 × 4096 ≈ 51M positions/epoch (same as 50000 × 1024 at bs=1024)
+#   P2: 5000  × 4096 ≈ 20M positions/epoch (same as 20000 × 1024 at bs=1024)
 P1_EPOCHS=10
 P1_LR=2e-3
-P1_STEPS=50000
+P1_STEPS=12500
 
 P2_EPOCHS=5
 P2_LR=5e-4
-P2_STEPS=20000
+P2_STEPS=5000
 P2_PUZZLE_RATIO=0.2
 
 echo "=== Chess Engine: Two-Phase Training ==="
