@@ -115,8 +115,8 @@ echo ""
 python train_engine.py \
     --data_dir "$DATA_DIR" \
     --checkpoint_dir "$CKPT_DIR" \
-    --batch_size 1024 \
-    --num_workers 8 \
+    --batch_size 4096 \
+    --num_workers 12 \
     --prefetch_factor 8 \
     --lr "$P1_LR" \
     --epochs "$P1_EPOCHS" \
@@ -188,8 +188,8 @@ python train_engine.py \
     --data_dir "$P2_DATA_DIR" \
     --checkpoint_dir "$CKPT_DIR" \
     $P2_PUZZLE_ARGS \
-    --batch_size 1024 \
-    --num_workers 8 \
+    --batch_size 4096 \
+    --num_workers 12 \
     --prefetch_factor 8 \
     --lr "$P2_LR" \
     --epochs "$P2_EPOCHS" \
