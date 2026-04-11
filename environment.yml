@@ -22,3 +22,5 @@ dependencies:
 
   - pip:
     - python-chess>=1.10
+    - fastapi>=0.110
+    - uvicorn[standard]>=0.27

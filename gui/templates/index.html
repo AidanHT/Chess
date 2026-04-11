@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Play Chess</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header id="header">
+            <h1>Chess Engine</h1>
+            <button id="settings-btn" class="icon-btn" title="Settings">&#9881;</button>
+        </header>
+
+        <!-- Main Content -->
+        <main id="main">
+            <!-- Top player info -->
+            <div id="player-top" class="player-info">
+                <span class="player-name" id="top-name">Engine</span>
+                <span class="captured-pieces" id="top-captured"></span>
+                <span class="material-adv" id="top-advantage"></span>
+            </div>
+
+            <div class="board-area">
+                <!-- Eval Bar -->
+                <div id="eval-container">
+                    <div id="eval-bar">
+                        <div id="eval-white"></div>
+                    </div>
+                    <div id="eval-score">0.0</div>
+                </div>
+
+                <!-- Board -->
+                <div id="board-wrapper">
+                    <div id="board"></div>
+                </div>
+
+                <!-- Side Panel -->
+                <div id="side-panel">
+                    <!-- Engine Analysis -->
+                    <div id="analysis" class="panel-section">
+                        <div class="panel-header">Engine Analysis</div>
+                        <div id="analysis-content">
+                            <div id="thinking-indicator" class="hidden">
+                                <span class="spinner"></span>
+                                <span id="thinking-text">Thinking...</span>
+                            </div>
+                            <div id="top-moves"></div>
+                            <div id="search-stats"></div>
+                        </div>
+                    </div>
+
+                    <!-- Move History -->
+                    <div id="history" class="panel-section">
+                        <div class="panel-header">Moves</div>
+                        <div id="moves-list"></div>
+                    </div>
+
+                    <!-- Controls -->
+                    <div id="controls">
+                        <button id="new-game-btn" class="ctrl-btn primary">New Game</button>
+                        <button id="undo-btn" class="ctrl-btn">Undo</button>
+                        <button id="flip-btn" class="ctrl-btn">Flip</button>
+                        <button id="resign-btn" class="ctrl-btn danger">Resign</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Bottom player info -->
+            <div id="player-bottom" class="player-info">
+                <span class="player-name" id="bottom-name">You</span>
+                <span class="captured-pieces" id="bottom-captured"></span>
+                <span class="material-adv" id="bottom-advantage"></span>
+            </div>
+        </main>
+
+        <!-- Status Bar -->
+        <div id="status-bar">
+            <span id="status-text">Connecting...</span>
+        </div>
+    </div>
+
+    <!-- ═══════════════════ Modals ═══════════════════ -->
+
+    <!-- New Game -->
+    <div class="modal-overlay" id="new-game-modal">
+        <div class="modal">
+            <h2>New Game</h2>
+            <div class="modal-section">
+                <label>Play as</label>
+                <div class="btn-group" id="color-select">
+                    <button class="option-btn selected" data-value="white">&#9812; White</button>
+                    <button class="option-btn" data-value="black">&#9818; Black</button>
+                    <button class="option-btn" data-value="random">&#9860; Random</button>
+                </div>
+            </div>
+            <div class="modal-section">
+                <label>Engine Strength</label>
+                <div class="btn-group" id="strength-select">
+                    <button class="option-btn" data-value="100">Easy</button>
+                    <button class="option-btn" data-value="400">Medium</button>
+                    <button class="option-btn selected" data-value="800">Hard</button>
+                    <button class="option-btn" data-value="1600">Max</button>
+                </div>
+            </div>
+            <button id="start-game-btn" class="ctrl-btn primary wide">Play</button>
+        </div>
+    </div>
+
+    <!-- Promotion -->
+    <div class="modal-overlay" id="promotion-modal">
+        <div class="modal promotion-dialog">
+            <h3>Promote to</h3>
+            <div id="promotion-pieces"></div>
+        </div>
+    </div>
+
+    <!-- Settings -->
+    <div class="modal-overlay" id="settings-modal">
+        <div class="modal">
+            <div class="modal-top-row">
+                <h2>Settings</h2>
+                <button class="close-btn" id="close-settings">&#10005;</button>
+            </div>
+            <div class="modal-section">
+                <label>Board Theme</label>
+                <div class="btn-group" id="theme-select">
+                    <button class="option-btn selected" data-value="green">
+                        <span class="swatch" style="background:#779952"></span> Green
+                    </button>
+                    <button class="option-btn" data-value="brown">
+                        <span class="swatch" style="background:#b58863"></span> Brown
+                    </button>
+                    <button class="option-btn" data-value="blue">
+                        <span class="swatch" style="background:#8ca2ad"></span> Blue
+                    </button>
+                </div>
+            </div>
+            <div class="modal-section">
+                <div class="toggle-row">
+                    <span>Sound</span>
+                    <label class="toggle"><input type="checkbox" id="sound-toggle" checked><span class="toggle-slider"></span></label>
+                </div>
+                <div class="toggle-row">
+                    <span>Legal Moves</span>
+                    <label class="toggle"><input type="checkbox" id="legal-toggle" checked><span class="toggle-slider"></span></label>
+                </div>
+                <div class="toggle-row">
+                    <span>Coordinates</span>
+                    <label class="toggle"><input type="checkbox" id="coords-toggle" checked><span class="toggle-slider"></span></label>
+                </div>
+                <div class="toggle-row">
+                    <span>Analysis Panel</span>
+                    <label class="toggle"><input type="checkbox" id="analysis-toggle" checked><span class="toggle-slider"></span></label>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Game Over -->
+    <div class="modal-overlay" id="game-over-modal">
+        <div class="modal game-over-dialog">
+            <h2 id="game-over-title">Game Over</h2>
+            <p id="game-over-detail"></p>
+            <button class="ctrl-btn primary wide" id="game-over-new">New Game</button>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

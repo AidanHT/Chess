@@ -170,6 +170,10 @@ class MCTS:
         self.dirichlet_eps = dirichlet_eps
         self.batch_size = batch_size
 
+        # Exposed for external analysis (e.g. GUI engine panel).
+        self._root: Optional[MCTSNode] = None
+        self._sims_done: int = 0
+
     # ──────────────────────────────────────────────────────────────────────────
     # Public interface
     # ──────────────────────────────────────────────────────────────────────────
@@ -219,6 +223,8 @@ class MCTS:
         """
         # ── Initialise and expand root ────────────────────────────────────────
         root = MCTSNode(prior=0.0)
+        self._root = root
+        self._sims_done = 0
         root_logits, _ = self._infer([board])
         self._expand(root, board, root_logits[0])
         self._apply_dirichlet_noise(root)
@@ -273,6 +279,7 @@ class MCTS:
                 self._backpropagate(path, node_value[id(leaf)])
 
             done += batch
+            self._sims_done = done
 
         return self._policy_vector(root, temperature)
 
@@ -474,12 +481,14 @@ class MCTS:
             # non-contiguous transpose view without an intermediate allocation.
             np.copyto(batch_np[i], encode_board(b).transpose(2, 0, 1))
 
-        batch_t = torch.from_numpy(batch_np).to(self.device)  # (B, 119, 8, 8)
+        batch_t = torch.from_numpy(batch_np).to(
+            device=self.device, dtype=next(self.model.parameters()).dtype
+        )
 
         policy_logits_t, values_t = self.model(batch_t)
         # policy_logits_t : (B, 4672),  values_t : (B,)
 
-        logits_list = [policy_logits_t[i].cpu().numpy() for i in range(B)]
+        logits_list = [policy_logits_t[i].cpu().float().numpy() for i in range(B)]
         values_np: np.ndarray = values_t.cpu().float().numpy()
         return logits_list, values_np
 
